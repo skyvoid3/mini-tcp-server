@@ -20,7 +20,7 @@ int main() {
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = 0;
 
-	status = getaddrinfo("127.0.0.1", MYPORT, &hints, &res);
+	status = getaddrinfo(NULL, MYPORT, &hints, &res);
 	if (status != 0) {
 		fprintf(stderr, "Gai error: %s\n", gai_strerror(status));
 		exit(1);

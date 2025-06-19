@@ -22,7 +22,7 @@ int main() {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_protocol = 0;
 
-	int gai_status = getaddrinfo("127.0.0.1", MYPORT, &hints, &res);
+	int gai_status = getaddrinfo(NULL, MYPORT, &hints, &res);
 	if (gai_status != 0) {
 		perror("GAI failed");
 		exit(EXIT_FAILURE);
