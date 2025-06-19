@@ -3,3 +3,30 @@ test
 fl.c
 test
 
+# Object files
+*.o
+*.obj
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Executables
+*.exe
+*.out
+a.out
+
+# Debug files
+*.dSYM/
+*.pdb
+
+# Dependency files
+*.d
+
+
