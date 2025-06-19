@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 #define BACKLOG 10
-#define MYPORT "7777"
+#define MYPORT "8080"
 
 int main() {
 
