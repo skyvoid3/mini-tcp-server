@@ -1,30 +1,8 @@
+# Ignore files with no extension (e.g., compiled executables)
+*
+!*/           # Don't ignore folders
+!*.c          # Don't ignore C source files
+!*.h          # Don't ignore header files
+!.gitignore   # Don't ignore .gitignore
 test.c
-fl.c
-
-# Object files
-*.o
-*.obj
-
-# Precompiled headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Executables
-*.exe
-*.out
-a.out
-
-# Debug files
-*.dSYM/
-*.pdb
-
-# Dependency files
-*.d
-
 
