@@ -22,12 +22,14 @@ int main() {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_protocol = 0;
 
+	// Getting my addrinfo for connections
 	int gai_status = getaddrinfo(NULL, MYPORT, &hints, &res);
 	if (gai_status != 0) {
 		perror("GAI failed");
 		exit(EXIT_FAILURE);
 	}
 
+	// Creating a socked and binding a port to it
 	for (p = res; p != NULL; p = p->ai_next) {
 		sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (sockfd == -1) {
@@ -55,6 +57,7 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
+	// Listening for incoming connections
 	int listen_status = listen(sockfd, BACKLOG);
 	if (listen_status == -1) {
 		perror("Listen failed");
@@ -68,6 +71,7 @@ int main() {
 	socklen_t               addr_len;
 	int                     accept_fd;
 
+	// Accepting a connection
 	while (1) {
 		addr_len = sizeof incoming_addr;
 		accept_fd =
@@ -80,6 +84,7 @@ int main() {
 		break;
 	}
 
+	// Getting the addr info of a client (ipv4 or ipv6)
 	struct sockaddr_storage peer_addr;
 	socklen_t               peer_addr_len = sizeof(peer_addr);
 
@@ -100,6 +105,7 @@ int main() {
 		}
 	}
 
+	// Receiving messages
 	ssize_t nbytes;
 	char    buffer[1024] = "";
 	size_t  bufsize = sizeof(buffer);
@@ -113,7 +119,7 @@ int main() {
 			break;
 		} else {
 			if (errno == EINTR) {
-				// interrupted by signal, retry
+				// Interrupted by signal, retry
 				continue;
 			} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				// Non-blocking socket: no data available now
