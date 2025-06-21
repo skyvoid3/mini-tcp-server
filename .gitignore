@@ -11,4 +11,6 @@
 # Don't ignore .gitignore file itself
 !.gitignore
 
+test.c
+
 
