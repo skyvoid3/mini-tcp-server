@@ -23,10 +23,10 @@ int main(void) {
 	int sockfd = -1;
 
 	// Creating socket
-	sockfd = create_socket(res);
+	sockfd = create_server_socket(res);
 	if (sockfd == -1) {
-		perror("Socket");
 		freeaddrinfo(res);
+		fprintf(stderr, "Failed to create and bind socket\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -99,10 +99,13 @@ int main(void) {
 	}
 
 	buffer[nbytes] = '\0';
-	fprintf(stdout, "Bytes received: %zd Message: %s", strlen(buffer), buffer);
+	fprintf(stdout, "Bytes received: %zd Message: %s\n", strlen(buffer), buffer);
 
 	close(accept_return.accept_fd);
 	close(sockfd);
 	freeaddrinfo(res);
 	return 0;
 }
+
+
+

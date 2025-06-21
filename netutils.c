@@ -1,6 +1,7 @@
 #include "netutils.h"
 #include <arpa/inet.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -16,7 +17,7 @@ struct addrinfo *resolve_server_host(const char *port) {
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
 
-	int gai_status = getaddrinfo(NULL, port, &hints, &res);
+	int gai_status = getaddrinfo(MYIP, port, &hints, &res);
 	if (gai_status != 0) {
 		fprintf(stderr, "GAI: %s\n", gai_strerror(gai_status));
 		return NULL;
@@ -44,7 +45,7 @@ struct addrinfo *resolve_client_host(const char *host, const char *port) {
 	return res;
 }
 
-int create_socket(struct addrinfo *res) {
+int create_server_socket(struct addrinfo *res) {
 	int              sockfd = -1;
 	struct addrinfo *p = NULL;
 
@@ -62,18 +63,25 @@ int create_socket(struct addrinfo *res) {
 			perror("Setsockopt");
 			close(sockfd);
 			continue;
+		}	
+		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == 0) {
+			printf("Created and bound socket\n");
+			return sockfd;
 		}
 
-		return sockfd;
+		perror("Bind");
+		close(sockfd);
+
 	}
 
 	return -1;
 }
+
 accept_return_t accept_connections(int sockfd) {
 
 	accept_return_t accept_return;
 	memset(&accept_return, 0, sizeof accept_return);
-       	socklen_t addr_len = sizeof accept_return.addr;
+	socklen_t addr_len = sizeof accept_return.addr;
 
 	while (1) {
 		accept_return.accept_fd =
@@ -82,9 +90,47 @@ accept_return_t accept_connections(int sockfd) {
 			perror("Accept failed");
 			continue;
 		}
-		printf("Successfuly accepted\n");
 		break;
 	}
 	accept_return.addr_len = addr_len;
 	return accept_return;
+}
+
+int retry_connect(struct addrinfo *res, unsigned short max_tries,
+                  unsigned short delay) {
+	for (unsigned short tries = 0; tries < max_tries; tries++) {
+		int              sockfd = -1;
+		struct addrinfo *p = NULL;
+
+		for (p = res; p != NULL; p = p->ai_next) {
+			sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+
+			if (sockfd == -1) {
+				perror("Socket failed");
+				continue;
+			}
+
+			int yes = 1;
+			if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
+			               sizeof yes) == -1) {
+				perror("Setsockopt");
+				close(sockfd);
+				continue;
+			}
+			if (connect(sockfd, p->ai_addr, p->ai_addrlen) == 0) {
+				printf("[+] Connected on attempt %hu\n", tries + 1);
+				return sockfd;
+			}
+			perror("Connect failed");
+			close(sockfd);
+		}
+
+		if (tries < max_tries - 1) {
+			printf("[-] Retry %hu/%hu\n", tries + 1, max_tries);
+			sleep(delay);
+		}
+	}
+
+	fprintf(stderr, "Out of maximum tries(%hu)\n", max_tries);
+	exit(EXIT_FAILURE);
 }
