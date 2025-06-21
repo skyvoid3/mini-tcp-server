@@ -1,0 +1,14 @@
+# Ignore everything
+*
+
+# But don't ignore directories (so git can recurse)
+!*/
+
+# Don't ignore C source and header files anywhere
+!*.c
+!*.h
+
+# Don't ignore .gitignore file itself
+!.gitignore
+
+
