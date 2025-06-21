@@ -1,8 +1,0 @@
-# Ignore files with no extension (e.g., compiled executables)
-*
-!*/           # Don't ignore folders
-!*.c          # Don't ignore C source files
-!*.h          # Don't ignore header files
-!.gitignore   # Don't ignore .gitignore
-test.c
-

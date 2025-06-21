@@ -1,6 +1,0 @@
-BasedOnStyle: LLVM
-IndentWidth: 4        # Width of one indent level
-UseTab: ForIndentation  # Use tabs for indentation only, spaces for alignment
-TabWidth: 4           # How many spaces a tab counts for
-IndentCaseLabels: true
-AlignConsecutiveDeclarations: true
