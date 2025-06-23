@@ -2,21 +2,16 @@
 #include <arpa/inet.h>
 #include <asm-generic/errno.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_MSG 1024
-
-/* PROBLEMS: WHEN CONNECTION CLOSED SERVER GIVE YOU: AND GUEST: PROMTS
- * SOME WEIRD SHIT HAPPENS WHEN SENT OR RECEIVED MESSAGES ARE TOO LONG
- * SENT AND RECV GETS MIXED UP
- * FIXXXXXXXX
-*/
 struct addrinfo *resolve_server_host(const char *port) {
 	struct addrinfo hints, *res;
 
@@ -214,7 +209,10 @@ ssize_t send_message(int sockfd) {
 		fprintf(stdout, "You: ");
 		if (fgets(buffer, sizeof buffer, stdin) == 0) {
 			return 0;
+		} else if (strcmp(buffer, "\n") == 0) {
+			return 0;
 		}
+
 		size_t len = strlen(buffer);
 		size_t total_sent = 0;
 
@@ -261,5 +259,33 @@ ssize_t recv_message(int sockfd, char *buffer) {
 		}
 		buffer[nbytes] = '\0';
 		return nbytes;
+	}
+}
+
+void sigchld_handler(int s) {
+	(void)s; // Quiet the unused warning
+
+	// Saving the errno value
+	int saved_errno = errno;
+
+	while (waitpid(-1, NULL, WNOHANG) > 0) {
+		printf("Child reaped\n");
+	}
+
+	errno = saved_errno;
+}
+
+void signal_handler(void) {
+	struct sigaction sa;
+
+	sa.sa_handler = sigchld_handler;
+
+	sigemptyset(&sa.sa_mask);
+
+	sa.sa_flags = SA_RESTART;
+
+	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+		perror("sigaction");
+		exit(1);
 	}
 }

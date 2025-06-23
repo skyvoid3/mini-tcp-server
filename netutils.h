@@ -1,8 +1,10 @@
 #ifndef NETUTILS_H
 #define NETUTILS_H
 
+#define MAX_MSG 1024
 #define MYIP "127.0.0.1"
 #include <netdb.h>
+#include <signal.h>
 
 /*
  * Sets AI_PASSIVE flag to bind to all available local IP addresses.
@@ -72,7 +74,7 @@ ssize_t send_message(int sockfd);
 // Receive messages
 ssize_t recv_message(int sockfd, char *buf);
 
-
-
+// Handling SIGHCLD signal and reaping dead child processes
+void signal_handler(void);
 
 #endif
