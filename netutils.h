@@ -1,14 +1,17 @@
 #ifndef NETUTILS_H
 #define NETUTILS_H
 
-#define MAX_MSG 1024
-#define MYIP "127.0.0.1"
 #include <netdb.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <poll.h>
+
+#define MAX_MSG 256
+#define MYIP "127.0.0.1"
 
 /*
  * Sets AI_PASSIVE flag to bind to all available local IP addresses.
- * 
+ *
  * Parameters:
  *   port - The service port as a string (e.g., "8080").
  *
@@ -21,14 +24,15 @@ struct addrinfo *resolve_server_host(const char *port);
 /*
  * Used for connect() to a TCP server
  *
- * On failure: returns NULL and prints error to stderr 
+ * On failure: returns NULL and prints error to stderr
  *
  * On success: returns pointer to a struct addrinfo
  */
-struct addrinfo *resolve_client_host(const char *host, const char *port);
+struct addrinfo *resolve_client_host(const char *host, uint16_t port);
 
 /*
- * Tries to create sockfd using socket(), set SO_REUSEADDR and bind()
+ * Tries to create a listening sockfd using socket(), listen(), set SO_REUSEADDR
+ * and bind()
  *
  * over every addrinfo returned by gai
  *
@@ -47,18 +51,31 @@ typedef struct {
  *
  * Success: returns struct with all clients info (see accept_return_t)
  *
- * Failure: accept_fd == -1 
+ * Failure: accept_fd == -1
  */
-accept_return_t accept_connections(int sockfd);
+accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size, struct pollfd **pfds);
 
-/* Choose how many times to try connection and
- The delay between connections (in seconds) */
-int retry_connect(struct addrinfo *res, unsigned short tries, unsigned short delay);
+/* Calls socket() and connect()
+ *
+ * If no connection was made program exits
+ *
+ * Returns sockfd on success
+ *
+ * Parameters:
+ *
+ * struct addrinfo res
+ *
+ * uns shrt amount of tries
+ *
+ * uns shrt delay between tries in seconds
+ */
+int retry_connect(struct addrinfo *res, unsigned short tries,
+                  unsigned short delay);
 
 /* Gets peer name of ipv4 and ipv6 addresses
  *
  * Prints error message (perror) on failure
-*/
+ */
 void print_peer_name(int sockfd);
 
 /* Pass in the sockfd and port variable to get the port number
@@ -66,7 +83,7 @@ void print_peer_name(int sockfd);
  * Returns -1 on err
  *
  */
-int get_port(int sockfd, uint16_t *port); 
+int get_port(int sockfd, uint16_t *port);
 
 // Send messages
 ssize_t send_message(int sockfd);
@@ -74,7 +91,30 @@ ssize_t send_message(int sockfd);
 // Receive messages
 ssize_t recv_message(int sockfd, char *buf);
 
-// Handling SIGHCLD signal and reaping dead child processes
-void signal_handler(void);
+// Returns sin_addr or sin6_addr based for Ipv4 or Ipv6 respectively 
+void *get_in_addr(struct sockaddr *sa);
+
+/* Adds a new client fd to poll()-ing process
+ *
+ * If the fd_size == fd_count resizes it by multiplying its capacity
+*/
+void add_to_pfds(struct pollfd **pfds, int newfd, int *fd_count, int *fd_size);
+
+// Delete client fd from poll()-ing when client disconnects
+void del_from_pfds(struct pollfd pfds[], int i, int *fd_count);
+
+/* Receives messages from clients and sends it to everybody else
+ *
+ * The pfd_i parameter is the index number of socket inside pfds array
+ *
+ * as determined in the poll() loop inside process_connections function
+*/
+void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds, int *pfd_i);
+
+/* Processes every client socket in pfds array.
+ *
+ * If the socket is the servers listening socket - accepts new connections
+*/
+void process_connections(int sockfd, int *fd_count, int *fd_size, struct pollfd **pfds);
 
 #endif
