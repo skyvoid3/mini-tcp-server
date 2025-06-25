@@ -1,4 +1,5 @@
 #include "netutils.h"
+#include "protocol.h"
 #include <arpa/inet.h>
 #include <asm-generic/errno.h>
 #include <errno.h>
@@ -12,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 struct addrinfo *resolve_server_host(const char *port) {
 	struct addrinfo hints, *res;
@@ -130,7 +132,27 @@ accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size,
 		break;
 	}
 
+	client_t *client = malloc(sizeof(client_t));
+	if (!client) {
+		perror("Malloc");
+		close(accept_return.accept_fd);
+		accept_return.accept_fd = -1;
+		return accept_return;
+	}
+	client->name = NULL;
+
 	add_to_pfds(pfds, accept_return.accept_fd, fd_count, fd_size);
+
+	client->sockfd = accept_return.accept_fd;
+
+	int pfd_i = *fd_count - 1;
+
+	if (request_name(client, *pfds, &pfd_i, fd_count) == false) {
+		free(client);
+		accept_return.accept_fd = -1;
+		return accept_return;
+	}
+
 	print_peer_name(accept_return.accept_fd);
 	accept_return.addr_len = addr_len;
 	return accept_return;
@@ -318,7 +340,7 @@ void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
                         int *pfd_i) {
 	char buf[MAX_MSG];
 
-	ssize_t nbytes_recv = recv(pfds[*pfd_i].fd, buf, sizeof buf, 0);
+	ssize_t nbytes_recv = recv(pfds[*pfd_i].fd, buf, sizeof buf - 1, 0);
 
 	int sender_fd = pfds[*pfd_i].fd;
 
@@ -336,18 +358,43 @@ void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
 		(*pfd_i)--;
 
 	} else {
-		printf("Pollserver: fd %d: %.*s", sender_fd, (int)nbytes_recv,
-		       buf);
+		buf[nbytes_recv] = '\0';
 
-		for (int j = 0; j < *fd_count; j++) {
-			int dest_fd = pfds[j].fd;
+		Command cmd = parse_command(buf);
 
-			if (dest_fd != sockfd && dest_fd != sender_fd) {
-				if (send(dest_fd, buf, nbytes_recv, 0) == -1) {
-					perror("Send");
+		if (cmd.type == CMD_MSG) {
+
+			int len = strlen(cmd.message);
+			printf("Pollserver: fd %d: %.*s", sender_fd, len, cmd.message);
+			for (int j = 0; j < *fd_count; j++) {
+
+				int dest_fd = pfds[j].fd;
+
+				if (dest_fd != sockfd && dest_fd != sender_fd) {
+
+					if (sendall(dest_fd, cmd.message, &len) == -1) {
+						perror("Send");
+					}
 				}
 			}
+		} else if (cmd.type == CMD_QUIT) {
+
+			printf("Client disconnected\n");
+			close(pfds[*pfd_i].fd);
+
+			del_from_pfds(pfds, *pfd_i, fd_count);
+			(*pfd_i)--;
+		} else {
+			char err_buf[63] =
+			    "Unknown command\nSend message: MSG <message>\nQuit: QUIT\n";
+
+			int err_buf_len = strlen(err_buf);
+
+			if (sendall(pfds[*pfd_i].fd, err_buf, &err_buf_len) == -1) {
+				perror("Unknown Command Send");
+			}
 		}
+		free_command(cmd);
 	}
 }
 
@@ -365,4 +412,91 @@ void process_connections(int sockfd, int *fd_count, int *fd_size,
 			}
 		}
 	}
+}
+
+int sendall(int s, char *buf, int *len) {
+
+	int total = 0;
+	int bytesleft = *len;
+	int n;
+
+	while (total < *len) {
+		n = send(s, buf + total, bytesleft, 0);
+		if (n == -1) {
+			break;
+		}
+		total += n;
+		bytesleft -= n;
+	}
+
+	*len = total;
+
+	return n == -1 ? -1 : 0;
+}
+
+bool request_name(client_t *client, struct pollfd *pfds, int *pfd_i,
+                  int *fd_count) {
+
+	char prompt[27] = "Please type in your name: ";
+	int  len = strlen(prompt);
+
+	if (sendall(client->sockfd, prompt, &len) == -1) {
+		perror("Request Name Send");
+	}
+
+	char temp[50] = {0};
+
+	ssize_t nbytes = recv(client->sockfd, temp, sizeof temp - 1, 0);
+	if (nbytes <= 0) {
+		if (nbytes == 0) {
+			printf("Pollserver: socket %d hung up\n", client->sockfd);
+		} else {
+			perror("Recv");
+		}
+
+		close(pfds[*pfd_i].fd);
+		del_from_pfds(pfds, *pfd_i, fd_count);
+		(*pfd_i)--;
+
+		return false;
+	}
+
+	if (strlen(temp) == 0) {
+		char empty_name_msg[38] = "Name cannot be empty. Disconnecting.\n";
+		int  msg_len = strlen(empty_name_msg);
+		sendall(client->sockfd, empty_name_msg, &msg_len);
+
+		close(client->sockfd);
+		del_from_pfds(pfds, *pfd_i, fd_count);
+		(*pfd_i)--;
+
+		return false;
+	}
+
+	if (temp[nbytes - 1] == '\n') {
+		temp[nbytes - 1] = '\0';
+	}
+
+	temp[nbytes] = '\0';
+
+	client->name = strdup(temp);
+	if (!client->name) {
+		char err_msg[46] = "Server error: internal issue. Disconnecting.\n";
+		int  err_msg_len = strlen(err_msg);
+		if (sendall(client->sockfd, err_msg, &err_msg_len) == -1) {
+			perror("Err Msg Send");
+		}
+
+		perror("Strdup");
+
+		close(client->sockfd);
+		del_from_pfds(pfds, *pfd_i, fd_count);
+		(*pfd_i)--;
+
+		return false;
+	}
+
+	printf("Client %d set name: %s\n", client->sockfd, client->name);
+
+	return true;
 }

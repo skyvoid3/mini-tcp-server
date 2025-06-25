@@ -2,9 +2,10 @@
 #define NETUTILS_H
 
 #include <netdb.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/types.h>
-#include <poll.h>
+#include <stdbool.h>
 
 #define MAX_MSG 256
 #define MYIP "127.0.0.1"
@@ -47,13 +48,20 @@ typedef struct {
 	int                     accept_fd;
 } accept_return_t;
 
+// Client information
+typedef struct {
+	int   sockfd;
+	char *name;
+} client_t;
+
 /* Tries to accept() connections
  *
  * Success: returns struct with all clients info (see accept_return_t)
  *
  * Failure: accept_fd == -1
  */
-accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size, struct pollfd **pfds);
+accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size,
+                                   struct pollfd **pfds);
 
 /* Calls socket() and connect()
  *
@@ -91,13 +99,13 @@ ssize_t send_message(int sockfd);
 // Receive messages
 ssize_t recv_message(int sockfd, char *buf);
 
-// Returns sin_addr or sin6_addr based for Ipv4 or Ipv6 respectively 
+// Returns sin_addr or sin6_addr based for Ipv4 or Ipv6 respectively
 void *get_in_addr(struct sockaddr *sa);
 
 /* Adds a new client fd to poll()-ing process
  *
  * If the fd_size == fd_count resizes it by multiplying its capacity
-*/
+ */
 void add_to_pfds(struct pollfd **pfds, int newfd, int *fd_count, int *fd_size);
 
 // Delete client fd from poll()-ing when client disconnects
@@ -108,13 +116,22 @@ void del_from_pfds(struct pollfd pfds[], int i, int *fd_count);
  * The pfd_i parameter is the index number of socket inside pfds array
  *
  * as determined in the poll() loop inside process_connections function
-*/
-void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds, int *pfd_i);
+ */
+void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
+                        int *pfd_i);
 
 /* Processes every client socket in pfds array.
  *
  * If the socket is the servers listening socket - accepts new connections
-*/
-void process_connections(int sockfd, int *fd_count, int *fd_size, struct pollfd **pfds);
+ */
+void process_connections(int sockfd, int *fd_count, int *fd_size,
+                         struct pollfd **pfds);
+
+// send() but cooler
+int sendall(int s, char *buf, int *len);
+
+// Request client name
+bool request_name(client_t *client, struct pollfd *pfds, int *pfd_i,
+                  int *fd_count);
 
 #endif
