@@ -21,23 +21,29 @@ int main(void) {
 		exit(EXIT_FAILURE);
 	}
 
-	int            fd_size = 5;
-	int            fd_count = 0;
-	int            sockfd = -1;
-	struct pollfd *pfds = malloc(sizeof *pfds * fd_size);
+	int conn_size = 5;
+	int conn_count = 0;
+	int sockfd = -1;
+
+	connection_info_t *connections =
+	    malloc(sizeof(connection_info_t) * conn_size);
+	if (!connections) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
 
 	// Creating socket
 	sockfd = create_server_socket(res);
 	if (sockfd == -1) {
-		freeaddrinfo(res);
 		fprintf(stderr, "Failed to create and bind socket\n");
 		exit(EXIT_FAILURE);
 	}
 
-	pfds[0].fd = sockfd;
-	pfds[0].events = POLLIN;
+	connections[0].pfds.fd = sockfd;
+	connections[0].pfds.events = POLLIN;
+	connections[0].client_info.client.state = READY;
 
-	fd_count = 1;
+	conn_count = 1;
 
 	// Getting the port number
 	uint16_t port = 0;
@@ -45,17 +51,35 @@ int main(void) {
 	printf("Pollserver listening on port: %" PRIu16 "\n", port);
 
 	while (1) {
-		int poll_count = poll(pfds, fd_count, -1);
+
+		struct pollfd *pfds = malloc(sizeof(struct pollfd) * conn_size);
+		if (!pfds) {
+			perror("Pfds malloc");
+			exit(1);
+		}
+
+		for (int i = 0; i < conn_count; i++) {
+			pfds[i] = connections[i].pfds;
+		}
+
+		int poll_count = poll(pfds, conn_count, -1);
 
 		if (poll_count == -1) {
 			perror("Poll");
+			free(pfds);
 			exit(EXIT_FAILURE);
 		}
 
-		process_connections(sockfd, &fd_count, &fd_size, &pfds);
+		for (int i = 0; i < conn_count; i++) {
+			connections[i].pfds.revents = pfds[i].revents;
+		}
+
+		free(pfds);
+
+		process_connections(sockfd, &conn_count, &conn_size, &connections);
 	}
 
-	free(pfds);
+	free(connections);
 	close(sockfd);
 	return 0;
 }

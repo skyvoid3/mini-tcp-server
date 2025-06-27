@@ -4,11 +4,13 @@
 #include <netdb.h>
 #include <poll.h>
 #include <signal.h>
-#include <sys/types.h>
 #include <stdbool.h>
+#include <sys/types.h>
 
 #define MAX_MSG 256
 #define MYIP "127.0.0.1"
+#define AWAITING_NAME 1
+#define READY 0
 
 /*
  * Sets AI_PASSIVE flag to bind to all available local IP addresses.
@@ -41,18 +43,32 @@ struct addrinfo *resolve_client_host(const char *host, uint16_t port);
  */
 int create_server_socket(struct addrinfo *res);
 
-// accept_connections() fills out this struct
-typedef struct {
-	struct sockaddr_storage addr;
-	socklen_t               addr_len;
-	int                     accept_fd;
-} accept_return_t;
+//
+
+typedef enum {
+	AWAITING_NAME_PROMPT,
+	AWAITING_NAME_INPUT,
+	CLIENT_READY
+} client_state_t;
 
 // Client information
 typedef struct {
-	int   sockfd;
-	char *name;
+	char           name[32];
+	client_state_t state;
 } client_t;
+
+// accept_connections() fills out this struct
+typedef struct {
+	struct sockaddr_storage addr;
+	client_t                client;
+	socklen_t               addr_len;
+} client_info_t;
+
+// Information about connection and client
+typedef struct {
+	client_info_t client_info;
+	struct pollfd pfds; // Socket fd and events for poll()
+} connection_info_t;
 
 /* Tries to accept() connections
  *
@@ -60,8 +76,8 @@ typedef struct {
  *
  * Failure: accept_fd == -1
  */
-accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size,
-                                   struct pollfd **pfds);
+bool accept_connections(int sockfd, int *conn_count, int *conn_size,
+                        connection_info_t **conn_info);
 
 /* Calls socket() and connect()
  *
@@ -106,7 +122,8 @@ void *get_in_addr(struct sockaddr *sa);
  *
  * If the fd_size == fd_count resizes it by multiplying its capacity
  */
-void add_to_pfds(struct pollfd **pfds, int newfd, int *fd_count, int *fd_size);
+void add_to_pfds(connection_info_t **conn_info, int newfd, int *conn_count,
+                 int *conn_size);
 
 // Delete client fd from poll()-ing when client disconnects
 void del_from_pfds(struct pollfd pfds[], int i, int *fd_count);
@@ -117,21 +134,48 @@ void del_from_pfds(struct pollfd pfds[], int i, int *fd_count);
  *
  * as determined in the poll() loop inside process_connections function
  */
-void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
-                        int *pfd_i);
+bool handle_client_data(int sockfd, int *fd_count, int *pfd_i,
+                        connection_info_t *conn_info);
 
 /* Processes every client socket in pfds array.
  *
  * If the socket is the servers listening socket - accepts new connections
  */
-void process_connections(int sockfd, int *fd_count, int *fd_size,
-                         struct pollfd **pfds);
+void process_connections(int sockfd, int *conn_count, int *conn_size,
+                         connection_info_t **conn_info);
 
 // send() but cooler
 int sendall(int s, char *buf, int *len);
 
 // Request client name
-bool request_name(client_t *client, struct pollfd *pfds, int *pfd_i,
-                  int *fd_count);
+bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count);
+
+// Add connected clients to client_info array
+void add_client_info(connection_info_t **conn_info, int newfd, int *conn_count,
+                     int *conn_size, struct sockaddr_storage addr,
+                     socklen_t addrlen);
+
+void cleanup_client(client_info_t *client_info, struct pollfd *pfds, int *pfd_i,
+                    int *fd_count);
+
+// Create client
+client_t *create_client(char *name, int state);
+
+// Free client memory
+void client_delete(client_t *client);
+
+// Create client_info struct
+client_info_t *create_client_info(struct sockaddr_storage addr,
+                                  socklen_t addr_len, client_t *client);
+
+void add_connection(connection_info_t **conn_info, int newfd, int *conn_count,
+                    int *conn_size, struct sockaddr_storage addr,
+                    socklen_t addrlen);
+
+void del_connection(connection_info_t conn_info[], int i, int *conn_count);
+
+void send_prompt(connection_info_t *conn_info, int pfd_i, int *conn_count);
+
+const char *inet_ntop2(void *addr, char *buf, size_t size);
 
 #endif

@@ -3,8 +3,10 @@
 #include <arpa/inet.h>
 #include <asm-generic/errno.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +15,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <stdbool.h>
 
 struct addrinfo *resolve_server_host(const char *port) {
 	struct addrinfo hints, *res;
@@ -28,6 +29,7 @@ struct addrinfo *resolve_server_host(const char *port) {
 	int gai_status = getaddrinfo(NULL, port, &hints, &res);
 	if (gai_status != 0) {
 		fprintf(stderr, "GAI: %s\n", gai_strerror(gai_status));
+
 		return NULL;
 	}
 
@@ -99,17 +101,17 @@ int create_server_socket(struct addrinfo *res) {
 	return sockfd;
 }
 
-accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size,
-                                   struct pollfd **pfds) {
+bool accept_connections(int sockfd, int *conn_count, int *conn_size,
+                        connection_info_t **conn_info) {
 
-	accept_return_t accept_return;
-	memset(&accept_return, 0, sizeof accept_return);
-	socklen_t addr_len = sizeof accept_return.addr;
+	int                     new_fd = -1;
+	struct sockaddr_storage addr;
+	memset(&addr, 0, sizeof addr);
+	socklen_t addrlen = sizeof addr;
 
 	while (1) {
-		accept_return.accept_fd =
-		    accept(sockfd, (struct sockaddr *)&accept_return.addr, &addr_len);
-		if (accept_return.accept_fd == -1) {
+		new_fd = accept(sockfd, (struct sockaddr *)&addr, &addrlen);
+		if (new_fd == -1) {
 			perror("Accept");
 
 			switch (errno) {
@@ -125,37 +127,17 @@ accept_return_t accept_connections(int sockfd, int *fd_count, int *fd_size,
 
 				default:
 					perror("Fatal accept error");
-					accept_return.accept_fd = -1;
-					return accept_return;
+					return false;
 			}
 		}
 		break;
 	}
 
-	client_t *client = malloc(sizeof(client_t));
-	if (!client) {
-		perror("Malloc");
-		close(accept_return.accept_fd);
-		accept_return.accept_fd = -1;
-		return accept_return;
-	}
-	client->name = NULL;
+	add_connection(conn_info, new_fd, conn_count, conn_size, addr, addrlen);
 
-	add_to_pfds(pfds, accept_return.accept_fd, fd_count, fd_size);
+	print_peer_name(new_fd);
 
-	client->sockfd = accept_return.accept_fd;
-
-	int pfd_i = *fd_count - 1;
-
-	if (request_name(client, *pfds, &pfd_i, fd_count) == false) {
-		free(client);
-		accept_return.accept_fd = -1;
-		return accept_return;
-	}
-
-	print_peer_name(accept_return.accept_fd);
-	accept_return.addr_len = addr_len;
-	return accept_return;
+	return true;
 }
 
 int retry_connect(struct addrinfo *res, unsigned short max_tries,
@@ -317,60 +299,72 @@ void *get_in_addr(struct sockaddr *sa) {
 	return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
-void add_to_pfds(struct pollfd **pfds, int newfd, int *fd_count, int *fd_size) {
-	if (*fd_count == *fd_size) {
-		*fd_size *= 2;
-		*pfds = realloc(*pfds, sizeof(**pfds) * (*fd_size));
+void add_connection(connection_info_t **conn_info, int newfd, int *conn_count,
+                    int *conn_size, struct sockaddr_storage addr,
+                    socklen_t addrlen) {
+
+	if (*conn_count == *conn_size) {
+		*conn_size *= 2;
+		connection_info_t *temp =
+		    realloc(*conn_info, sizeof(connection_info_t) * (*conn_size));
+		if (!temp) {
+			perror("add_connection() realloc");
+			exit(1);
+		}
+		*conn_info = temp;
 	}
 
-	(*pfds)[*fd_count].fd = newfd;
-	(*pfds)[*fd_count].events = POLLIN;
-	(*pfds)[*fd_count].revents = 0;
+	(*conn_info)[*conn_count].pfds.fd = newfd;
+	(*conn_info)[*conn_count].pfds.events = POLLIN | POLLOUT;
+	(*conn_info)[*conn_count].pfds.revents = 0;
+	(*conn_info)[*conn_count].client_info.addr = addr;
+	(*conn_info)[*conn_count].client_info.addr_len = addrlen;
+	(*conn_info)[*conn_count].client_info.client.state = AWAITING_NAME;
+	memset((*conn_info)[*conn_count].client_info.client.name, 0,
+	       sizeof((*conn_info)[*conn_count].client_info.client.name));
 
-	(*fd_count)++;
+	(*conn_count)++;
 }
 
-void del_from_pfds(struct pollfd pfds[], int i, int *fd_count) {
-	pfds[i] = pfds[*fd_count - 1];
+void del_connection(connection_info_t conn_info[], int i, int *conn_count) {
+	conn_info[i] = conn_info[*conn_count - 1];
 
-	(*fd_count)--;
+	(*conn_count)--;
 }
 
-void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
-                        int *pfd_i) {
+bool handle_client_data(int listener, int *conn_count, int *pfd_i,
+                        connection_info_t *conn_info) {
 	char buf[MAX_MSG];
+	int  sender_fd = conn_info[*pfd_i].pfds.fd;
 
-	ssize_t nbytes_recv = recv(pfds[*pfd_i].fd, buf, sizeof buf - 1, 0);
-
-	int sender_fd = pfds[*pfd_i].fd;
+	ssize_t nbytes_recv = recv(sender_fd, buf, sizeof buf - 1, 0);
 
 	if (nbytes_recv <= 0) {
 		if (nbytes_recv == 0) {
 			printf("Pollserver: socket %d hung up\n", sender_fd);
 		} else {
-			perror("Recv");
+			perror("handle_client_data recv");
 		}
 
-		close(pfds[*pfd_i].fd);
+		close(sender_fd);
 
-		del_from_pfds(pfds, *pfd_i, fd_count);
-
-		(*pfd_i)--;
+		del_connection(conn_info, *pfd_i, conn_count);
+		return false;
 
 	} else {
 		buf[nbytes_recv] = '\0';
 
-		Command cmd = parse_command(buf);
+		Command cmd = parse_command(buf, conn_info, pfd_i);
 
 		if (cmd.type == CMD_MSG) {
 
 			int len = strlen(cmd.message);
-			printf("Pollserver: fd %d: %.*s", sender_fd, len, cmd.message);
-			for (int j = 0; j < *fd_count; j++) {
+			printf("%.*s", len, cmd.message);
+			for (int j = 0; j < *conn_count; j++) {
 
-				int dest_fd = pfds[j].fd;
+				int dest_fd = conn_info[j].pfds.fd;
 
-				if (dest_fd != sockfd && dest_fd != sender_fd) {
+				if (dest_fd != listener && dest_fd != sender_fd) {
 
 					if (sendall(dest_fd, cmd.message, &len) == -1) {
 						perror("Send");
@@ -379,38 +373,78 @@ void handle_client_data(int sockfd, int *fd_count, struct pollfd *pfds,
 			}
 		} else if (cmd.type == CMD_QUIT) {
 
-			printf("Client disconnected\n");
-			close(pfds[*pfd_i].fd);
+			printf("%s disconnected\n",
+			       conn_info[*pfd_i].client_info.client.name);
 
-			del_from_pfds(pfds, *pfd_i, fd_count);
-			(*pfd_i)--;
+			del_connection(conn_info, *pfd_i, conn_count);
+
+			int msg_len = strlen(cmd.message);
+			for (int j = 0; j < *conn_count; j++) {
+				int len = msg_len;
+
+				int dest_fd = conn_info[j].pfds.fd;
+
+				if (dest_fd != listener && dest_fd != sender_fd) {
+
+					if (sendall(dest_fd, cmd.message, &len) == -1) {
+						perror("Send");
+					}
+				}
+			}
+
+			close(sender_fd);
+
+			return false;
+
 		} else {
 			char err_buf[63] =
 			    "Unknown command\nSend message: MSG <message>\nQuit: QUIT\n";
 
 			int err_buf_len = strlen(err_buf);
-
-			if (sendall(pfds[*pfd_i].fd, err_buf, &err_buf_len) == -1) {
+			if (sendall(sender_fd, err_buf, &err_buf_len) == -1) {
 				perror("Unknown Command Send");
 			}
 		}
 		free_command(cmd);
 	}
+	return true;
 }
 
-void process_connections(int sockfd, int *fd_count, int *fd_size,
-                         struct pollfd **pfds) {
-	for (int i = 0; i < *fd_count; i++) {
+void process_connections(int sockfd, int *conn_count, int *conn_size,
+                         connection_info_t **conn_info) {
 
-		if ((*pfds)[i].revents & (POLLIN | POLLHUP)) {
+	int i = 0;
+	while (i < *conn_count) {
+		bool client_still_exists;
 
-			if ((*pfds)[i].fd == sockfd) {
+		if ((*conn_info)[i].pfds.revents & (POLLIN | POLLOUT)) {
+			client_still_exists = true;
 
-				accept_connections(sockfd, fd_count, fd_size, pfds);
-			} else {
-				handle_client_data(sockfd, fd_count, *pfds, &i);
+			if ((*conn_info)[i].client_info.client.state == AWAITING_NAME) {
+				client_still_exists = request_name(*conn_info, i, conn_count);
 			}
 		}
+
+		if ((*conn_info)[i].pfds.revents & (POLLIN | POLLHUP)) {
+
+			if ((*conn_info)[i].pfds.fd == sockfd) {
+				accept_connections(sockfd, conn_count, conn_size, conn_info);
+
+			} else {
+
+				if (!client_still_exists) {
+					continue;
+				}
+
+				client_still_exists =
+				    handle_client_data(sockfd, conn_count, &i, *conn_info);
+
+				if (!client_still_exists) {
+					continue;
+				}
+			}
+		}
+		i++;
 	}
 }
 
@@ -434,69 +468,79 @@ int sendall(int s, char *buf, int *len) {
 	return n == -1 ? -1 : 0;
 }
 
-bool request_name(client_t *client, struct pollfd *pfds, int *pfd_i,
-                  int *fd_count) {
+bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count) {
 
-	char prompt[27] = "Please type in your name: ";
+	char prompt[30] = "Please type in your name: ";
 	int  len = strlen(prompt);
 
-	if (sendall(client->sockfd, prompt, &len) == -1) {
+	if (sendall(conn_info[pfd_i].pfds.fd, prompt, &len) == -1) {
 		perror("Request Name Send");
+	} else {
+		printf("Request prompt sent!\n");
 	}
 
-	char temp[50] = {0};
+	char temp[32] = {0};
 
-	ssize_t nbytes = recv(client->sockfd, temp, sizeof temp - 1, 0);
+	ssize_t nbytes = recv(conn_info[pfd_i].pfds.fd, temp, sizeof temp - 1, 0);
 	if (nbytes <= 0) {
 		if (nbytes == 0) {
-			printf("Pollserver: socket %d hung up\n", client->sockfd);
+			printf("Pollserver: socket %d hung up\n", conn_info[pfd_i].pfds.fd);
 		} else {
 			perror("Recv");
 		}
 
-		close(pfds[*pfd_i].fd);
-		del_from_pfds(pfds, *pfd_i, fd_count);
-		(*pfd_i)--;
-
+		del_connection(conn_info, pfd_i, conn_count);
 		return false;
+	}
+
+	if (nbytes > 1 && temp[nbytes - 1] == '\n') {
+		temp[nbytes - 1] = '\0';
+		if (temp[nbytes - 2] == '\r') {
+			temp[nbytes - 2] = '\0';
+		}
 	}
 
 	if (strlen(temp) == 0) {
 		char empty_name_msg[38] = "Name cannot be empty. Disconnecting.\n";
 		int  msg_len = strlen(empty_name_msg);
-		sendall(client->sockfd, empty_name_msg, &msg_len);
+		sendall(conn_info[pfd_i].pfds.fd, empty_name_msg, &msg_len);
 
-		close(client->sockfd);
-		del_from_pfds(pfds, *pfd_i, fd_count);
-		(*pfd_i)--;
-
+		del_connection(conn_info, pfd_i, conn_count);
 		return false;
 	}
 
-	if (temp[nbytes - 1] == '\n') {
-		temp[nbytes - 1] = '\0';
-	}
+	snprintf(conn_info[pfd_i].client_info.client.name,
+	         sizeof(conn_info[pfd_i].client_info.client.name), "%s", temp);
 
-	temp[nbytes] = '\0';
+	char clientIP[INET6_ADDRSTRLEN];
 
-	client->name = strdup(temp);
-	if (!client->name) {
-		char err_msg[46] = "Server error: internal issue. Disconnecting.\n";
-		int  err_msg_len = strlen(err_msg);
-		if (sendall(client->sockfd, err_msg, &err_msg_len) == -1) {
-			perror("Err Msg Send");
-		}
+	printf("Client %s set name: %s\n", inet_ntop2(&(conn_info[pfd_i].client_info.addr), clientIP, sizeof clientIP),
+	       conn_info[pfd_i].client_info.client.name);
 
-		perror("Strdup");
-
-		close(client->sockfd);
-		del_from_pfds(pfds, *pfd_i, fd_count);
-		(*pfd_i)--;
-
-		return false;
-	}
-
-	printf("Client %d set name: %s\n", client->sockfd, client->name);
+	conn_info[pfd_i].client_info.client.state = READY;
 
 	return true;
+}
+
+const char *inet_ntop2(void *addr, char *buf, size_t size)
+{
+    struct sockaddr_storage *sas = addr;
+    struct sockaddr_in *sa4;
+    struct sockaddr_in6 *sa6;
+    void *src;
+
+    switch (sas->ss_family) {
+        case AF_INET:
+            sa4 = addr;
+            src = &(sa4->sin_addr);
+            break;
+        case AF_INET6:
+            sa6 = addr;
+            src = &(sa6->sin6_addr);
+            break;
+        default:
+            return NULL;
+    }
+
+    return inet_ntop(sas->ss_family, src, buf, size);
 }
