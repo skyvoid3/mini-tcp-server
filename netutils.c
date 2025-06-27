@@ -23,8 +23,8 @@ struct addrinfo *resolve_server_host(const char *port) {
 
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_protocol = 0;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
+	hints.ai_socktype = SOCK_STREAM; // TCP
+	hints.ai_flags = AI_PASSIVE; // Use any available ip address on machine
 
 	int gai_status = getaddrinfo(NULL, port, &hints, &res);
 	if (gai_status != 0) {
@@ -47,7 +47,7 @@ struct addrinfo *resolve_client_host(const char *host, uint16_t port) {
 
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_protocol = 0;
-	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_socktype = SOCK_STREAM; // TCP
 
 	int gai_status = getaddrinfo(host, port_str, &hints, &res);
 	if (gai_status != 0) {
@@ -59,6 +59,7 @@ struct addrinfo *resolve_client_host(const char *host, uint16_t port) {
 }
 
 int create_server_socket(struct addrinfo *res) {
+
 	int              sockfd = -1;
 	struct addrinfo *p = NULL;
 
@@ -133,8 +134,10 @@ bool accept_connections(int sockfd, int *conn_count, int *conn_size,
 		break;
 	}
 
+	// Add new connection information to conn_info array
 	add_connection(conn_info, new_fd, conn_count, conn_size, addr, addrlen);
 
+	// Connected to <peer address>
 	print_peer_name(new_fd);
 
 	return true;
@@ -213,81 +216,31 @@ void print_peer_name(int sockfd) {
 }
 
 int get_port(int sockfd, uint16_t *port) {
+
 	struct sockaddr_storage addr;
 	memset(&addr, 0, sizeof addr);
+
 	socklen_t len = sizeof addr;
+
 	if (getsockname(sockfd, (struct sockaddr *)&addr, &len) == -1) {
 		return -1;
 	}
+
 	if (addr.ss_family == AF_INET) {
 		struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr;
 		*port = ntohs(addr4->sin_port);
+
 	} else if (addr.ss_family == AF_INET6) {
+
 		struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr;
 		*port = ntohs(addr6->sin6_port);
+
 	} else {
+
 		return -1;
 	}
+
 	return 0;
-}
-
-ssize_t send_message(int sockfd) {
-	char buffer[1024];
-
-	while (1) {
-		if (fgets(buffer, sizeof buffer, stdin) == 0) {
-			return 0;
-		} else if (strcmp(buffer, "\n") == 0) {
-			return 0;
-		}
-
-		size_t len = strlen(buffer);
-		size_t total_sent = 0;
-
-		while (total_sent < len) {
-
-			ssize_t nbytes =
-			    send(sockfd, buffer + total_sent, len - total_sent, 0);
-			if (nbytes == -1) {
-				switch (errno) {
-					case EINTR:
-					case EAGAIN:
-						fprintf(stdout, "Trying again\n");
-						continue;
-
-					default:
-						perror("Send");
-						return -1;
-				}
-			}
-			total_sent += nbytes;
-		}
-		return total_sent;
-	}
-}
-
-ssize_t recv_message(int sockfd, char *buffer) {
-	size_t len = MAX_MSG;
-
-	while (1) {
-		ssize_t nbytes = recv(sockfd, buffer, len, 0);
-		if (nbytes == -1) {
-			switch (errno) {
-				case EINTR:
-				case EAGAIN:
-					fprintf(stdout, "Trying again\n");
-					continue;
-				default:
-					perror("Recv");
-					return -1;
-			}
-		} else if (nbytes == 0) {
-			fprintf(stdout, "Connection closed\n");
-			return 0;
-		}
-		buffer[nbytes] = '\0';
-		return nbytes;
-	}
 }
 
 void *get_in_addr(struct sockaddr *sa) {
@@ -303,7 +256,7 @@ void add_connection(connection_info_t **conn_info, int newfd, int *conn_count,
                     int *conn_size, struct sockaddr_storage addr,
                     socklen_t addrlen) {
 
-	if (*conn_count == *conn_size) {
+	if (*conn_count == *conn_size) { // If no space left 2x the size and realloc
 		*conn_size *= 2;
 		connection_info_t *temp =
 		    realloc(*conn_info, sizeof(connection_info_t) * (*conn_size));
@@ -334,6 +287,7 @@ void del_connection(connection_info_t conn_info[], int i, int *conn_count) {
 
 bool handle_client_data(int listener, int *conn_count, int *pfd_i,
                         connection_info_t *conn_info) {
+
 	char buf[MAX_MSG];
 	int  sender_fd = conn_info[*pfd_i].pfds.fd;
 
@@ -354,12 +308,13 @@ bool handle_client_data(int listener, int *conn_count, int *pfd_i,
 	} else {
 		buf[nbytes_recv] = '\0';
 
+		// Parsing the message through protocol
 		Command cmd = parse_command(buf, conn_info, pfd_i);
 
 		if (cmd.type == CMD_MSG) {
 
 			int len = strlen(cmd.message);
-			printf("%.*s", len, cmd.message);
+			printf("%.*s", len, cmd.message); // message string comes with senders name. Sender: <message>
 			for (int j = 0; j < *conn_count; j++) {
 
 				int dest_fd = conn_info[j].pfds.fd;
@@ -371,6 +326,7 @@ bool handle_client_data(int listener, int *conn_count, int *pfd_i,
 					}
 				}
 			}
+
 		} else if (cmd.type == CMD_QUIT) {
 
 			printf("%s disconnected\n",
@@ -394,6 +350,8 @@ bool handle_client_data(int listener, int *conn_count, int *pfd_i,
 
 			close(sender_fd);
 
+			free_command(cmd);
+
 			return false;
 
 		} else {
@@ -415,12 +373,12 @@ void process_connections(int sockfd, int *conn_count, int *conn_size,
 
 	int i = 0;
 	while (i < *conn_count) {
-		bool client_still_exists;
+		bool client_still_exists; // If a function fails this sets to false
 
 		if ((*conn_info)[i].pfds.revents & (POLLIN | POLLOUT)) {
 			client_still_exists = true;
 
-			if ((*conn_info)[i].client_info.client.state == AWAITING_NAME) {
+			if ((*conn_info)[i].client_info.client.state == AWAITING_NAME) { // Check if client has name
 				client_still_exists = request_name(*conn_info, i, conn_count);
 			}
 		}
@@ -448,7 +406,7 @@ void process_connections(int sockfd, int *conn_count, int *conn_size,
 	}
 }
 
-int sendall(int s, char *buf, int *len) {
+int sendall(int s, char *buf, int *len) { // Partial send() handler
 
 	int total = 0;
 	int bytesleft = *len;
@@ -475,9 +433,7 @@ bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count) {
 
 	if (sendall(conn_info[pfd_i].pfds.fd, prompt, &len) == -1) {
 		perror("Request Name Send");
-	} else {
-		printf("Request prompt sent!\n");
-	}
+	} 
 
 	char temp[32] = {0};
 
