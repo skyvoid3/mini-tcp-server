@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,7 +25,7 @@ struct addrinfo *resolve_server_host(const char *port) {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_protocol = 0;
 	hints.ai_socktype = SOCK_STREAM; // TCP
-	hints.ai_flags = AI_PASSIVE; // Use any available ip address on machine
+	hints.ai_flags = AI_PASSIVE;     // Use any available ip address on machine
 
 	int gai_status = getaddrinfo(NULL, port, &hints, &res);
 	if (gai_status != 0) {
@@ -314,7 +315,8 @@ bool handle_client_data(int listener, int *conn_count, int *pfd_i,
 		if (cmd.type == CMD_MSG) {
 
 			int len = strlen(cmd.message);
-			printf("%.*s", len, cmd.message); // message string comes with senders name. Sender: <message>
+			printf("%.*s", len, cmd.message); // message string comes with
+			                                  // senders name. Sender: <message>
 			for (int j = 0; j < *conn_count; j++) {
 
 				int dest_fd = conn_info[j].pfds.fd;
@@ -378,7 +380,8 @@ void process_connections(int sockfd, int *conn_count, int *conn_size,
 		if ((*conn_info)[i].pfds.revents & (POLLIN | POLLOUT)) {
 			client_still_exists = true;
 
-			if ((*conn_info)[i].client_info.client.state == AWAITING_NAME) { // Check if client has name
+			if ((*conn_info)[i].client_info.client.state ==
+			    AWAITING_NAME) { // Check if client has name
 				client_still_exists = request_name(*conn_info, i, conn_count);
 			}
 		}
@@ -433,7 +436,7 @@ bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count) {
 
 	if (sendall(conn_info[pfd_i].pfds.fd, prompt, &len) == -1) {
 		perror("Request Name Send");
-	} 
+	}
 
 	char temp[32] = {0};
 
@@ -470,7 +473,9 @@ bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count) {
 
 	char clientIP[INET6_ADDRSTRLEN];
 
-	printf("Client %s set name: %s\n", inet_ntop2(&(conn_info[pfd_i].client_info.addr), clientIP, sizeof clientIP),
+	printf("Client %s set name: %s\n",
+	       inet_ntop2(&(conn_info[pfd_i].client_info.addr), clientIP,
+	                  sizeof clientIP),
 	       conn_info[pfd_i].client_info.client.name);
 
 	conn_info[pfd_i].client_info.client.state = READY;
@@ -478,25 +483,35 @@ bool request_name(connection_info_t *conn_info, int pfd_i, int *conn_count) {
 	return true;
 }
 
-const char *inet_ntop2(void *addr, char *buf, size_t size)
-{
-    struct sockaddr_storage *sas = addr;
-    struct sockaddr_in *sa4;
-    struct sockaddr_in6 *sa6;
-    void *src;
+const char *inet_ntop2(void *addr, char *buf, size_t size) {
+	struct sockaddr_storage *sas = addr;
+	struct sockaddr_in      *sa4;
+	struct sockaddr_in6     *sa6;
+	void                    *src;
 
-    switch (sas->ss_family) {
-        case AF_INET:
-            sa4 = addr;
-            src = &(sa4->sin_addr);
-            break;
-        case AF_INET6:
-            sa6 = addr;
-            src = &(sa6->sin6_addr);
-            break;
-        default:
-            return NULL;
-    }
+	switch (sas->ss_family) {
+		case AF_INET:
+			sa4 = addr;
+			src = &(sa4->sin_addr);
+			break;
+		case AF_INET6:
+			sa6 = addr;
+			src = &(sa6->sin6_addr);
+			break;
+		default:
+			return NULL;
+	}
 
-    return inet_ntop(sas->ss_family, src, buf, size);
+	return inet_ntop(sas->ss_family, src, buf, size);
 }
+
+void cleanup(connection_info_t *conn_info, int conn_count) {
+	for (int i = 0; i < conn_count; i++) {
+		int fd = conn_info[i].pfds.fd;
+		if (fd > 0)
+			close(fd);
+	}
+	free(conn_info);
+}
+
+

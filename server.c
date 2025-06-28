@@ -4,8 +4,10 @@
 #include <netdb.h>      // gai, gethostbyname() also structs
 #include <netinet/in.h> // struct sockaddr_in etc
 #include <poll.h>       // poll()
+#include <signal.h>     // handle signals SIGINT, SIGTERM
 #include <stdio.h>      // perror()
 #include <stdlib.h>     // Memory managment like malloc() etc
+#include <string.h>     // for memset()
 #include <sys/socket.h> // Socket API
 #include <sys/types.h>  // ssize_t and other types
 #include <sys/wait.h>   // for waitpid()
@@ -14,7 +16,24 @@
 #define MYPORT "8080"
 #define BACKLOG 10
 
+volatile sig_atomic_t stop_server = 0;
+
+void handle_signal(int signo) {
+	if (signo == SIGINT || signo == SIGTERM) {
+		stop_server = 1;
+	}
+}
+
 int main(void) {
+
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handle_signal;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
 
 	struct addrinfo *res = resolve_server_host(MYPORT);
 	if (res == NULL) {
@@ -64,6 +83,12 @@ int main(void) {
 
 		int poll_count = poll(pfds, conn_count, -1);
 
+		if (stop_server) {
+			printf("\n[INFO] Signal received. Shutting down...\n");
+			free(pfds);
+			break;
+		}
+
 		if (poll_count == -1) {
 			perror("Poll");
 			free(pfds);
@@ -79,7 +104,7 @@ int main(void) {
 		process_connections(sockfd, &conn_count, &conn_size, &connections);
 	}
 
-	free(connections);
+	cleanup(connections, conn_count);
 	close(sockfd);
 	return 0;
 }

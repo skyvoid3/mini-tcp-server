@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define MAX_MSG 256
 #define MYIP "127.0.0.1"
@@ -171,5 +172,9 @@ void del_connection(connection_info_t conn_info[], int i, int *conn_count);
 /*inet_ntop() but better ;)
 * */
 const char *inet_ntop2(void *addr, char *buf, size_t size);
+
+// Cleanup in case of a signal
+void cleanup(connection_info_t *conn_info, int conn_count);
+
 
 #endif
